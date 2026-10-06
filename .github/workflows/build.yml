@@ -29,20 +29,31 @@ jobs:
         shell: bash
         run: python -m json.tool apps.json >/dev/null
 
-      - name: Patch layered Containerfile for CI secret handling
+      - name: Patch layered Containerfile for stable apps manifest
         shell: bash
         run: |
           set -euo pipefail
           file="frappe_docker/images/layered/Containerfile"
 
-          # Keep the BuildKit secret away from /opt/frappe. Bench may recreate
-          # or modify files under /opt/frappe while initializing the bench.
-          sed -i 's#target=/opt/frappe/apps.json#target=/tmp/frappe-apps.json#g' "$file"
-          sed -i 's#/opt/frappe/apps.json#/tmp/frappe-apps.json#g' "$file"
+          python - <<'PY'
+          from pathlib import Path
 
-          # The upstream --verbose flag creates an enormous GitHub Actions log
-          # during Yarn installation without adding useful build diagnostics.
-          sed -i '/^[[:space:]]*--verbose \\$/d' "$file"
+          p = Path("frappe_docker/images/layered/Containerfile")
+          s = p.read_text()
+
+          old = """RUN --mount=type=secret,id=apps_json,target=/opt/frappe/apps.json,uid=1000,gid=1000 \\\n  : "${CACHE_BUST}" && \\\n  export APP_INSTALL_ARGS="" && \\\n  if [ -f /opt/frappe/apps.json ] && [ -s /opt/frappe/apps.json ]; then \\\n    export APP_INSTALL_ARGS="--apps_path=/opt/frappe/apps.json"; \\\n  fi && \\\n  bench init ${APP_INSTALL_ARGS} \\\n"""
+
+          new = """RUN --mount=type=secret,id=apps_json,target=/run/secrets/apps_json,uid=1000,gid=1000 \\\n  : "${CACHE_BUST}" && \\\n  cp /run/secrets/apps_json /tmp/apps.json && \\\n  python -m json.tool /tmp/apps.json >/dev/null && \\\n  test -s /tmp/apps.json && \\\n  bench init --apps_path=/tmp/apps.json \\\n"""
+
+          if old not in s:
+              raise SystemExit("Expected upstream Containerfile block not found; refusing unsafe patch")
+
+          s = s.replace(old, new, 1)
+          s = s.replace("    --verbose \\\n", "", 1)
+          p.write_text(s)
+          PY
+
+          grep -q -- '--apps_path=/tmp/apps.json' "$file"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
