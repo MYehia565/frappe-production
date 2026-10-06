@@ -42,6 +42,16 @@ jobs:
           print(f"Validated {len(apps)} app definitions")
           PY
 
+      - name: Reduce Frappe build log volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i '/^[[:space:]]*--verbose[[:space:]]*\\$/d' frappe_docker/images/layered/Containerfile
+          if grep -q -- '--verbose' frappe_docker/images/layered/Containerfile; then
+            echo "Unexpected verbose flag remains"
+            exit 1
+          fi
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
